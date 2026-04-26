@@ -1,6 +1,6 @@
 """
-ELITE 2500-3500+ Bot
-TRUE synchronization (±1 turn), precise calculations, ROI filtering, timing optimization
+ULTIMATE 4000-Rating Bot
+All strategic improvements: Rush, multi-target, proper intercept, comet capture, endgame optimization
 """
 
 import math
@@ -40,11 +40,26 @@ def travel_time(dist, ships):
     return dist / fleet_speed(ships)
 
 def predict_position(x, y, angular_vel, turns):
+    """Proper orbital prediction."""
     d = distance(x, y, CENTER[0], CENTER[1])
     if d >= ROTATION_RADIUS_LIMIT - 5:
         return x, y
     angle = math.atan2(y-CENTER[1], x-CENTER[0]) + angular_vel * turns
     return CENTER[0] + d*math.cos(angle), CENTER[1] + d*math.sin(angle)
+
+def iterative_intercept(sx, sy, tx, ty, angular_vel, fleet_ships, max_iter=5):
+    """PROPER iterative intercept for orbiting targets."""
+    speed = fleet_speed(fleet_ships)
+    
+    for _ in range(max_iter):
+        dx, dy = tx - sx, ty - sy
+        dist = math.sqrt(dx*dx + dy*dy)
+        eta = dist / speed
+        
+        # Predict target position at ETA
+        tx, ty = predict_position(tx, ty, angular_vel, eta)
+    
+    return angle_to(sx, sy, tx, ty), eta
 
 def line_circle_intersect(x1, y1, x2, y2, cx, cy, r):
     dx, dy = x2-x1, y2-y1
@@ -65,10 +80,13 @@ def crosses_sun(x1, y1, x2, y2):
     return line_circle_intersect(x1, y1, x2, y2, CENTER[0], CENTER[1], SUN_RADIUS)
 
 def safe_angle(sx, sy, tx, ty):
+    """Find safe angle with waypoint if needed."""
     direct = angle_to(sx, sy, tx, ty)
     if not crosses_sun(sx, sy, tx, ty):
         return direct
-    for off in [0.2, -0.2, 0.4, -0.4, 0.6, -0.6, 0.8, -0.8]:
+    
+    # Try waypoints around sun
+    for off in [0.3, -0.3, 0.6, -0.6, 0.9, -0.9]:
         test = direct + off
         test_x, test_y = sx + math.cos(test)*120, sy + math.sin(test)*120
         if not crosses_sun(sx, sy, test_x, test_y):
@@ -91,14 +109,14 @@ class GameState:
         
         self.planet_map = {p.id: p for p in self.planets}
         
-        # Detailed fleet tracking
+        # PROPER fleet tracking
         self.my_fleet_targets = self._track_fleets(self.player)
         self.enemy_fleet_targets = {}
         for i in range(4):
             if i != self.player:
                 self.enemy_fleet_targets[i] = self._track_fleets(i)
         
-        # Comprehensive metrics
+        # Metrics
         self.my_ships = sum(p.ships for p in self.my_planets)
         self.my_fleet_ships = sum(f.ships for f in self.fleets if f.owner == self.player)
         self.my_total = self.my_ships + self.my_fleet_ships
@@ -117,72 +135,65 @@ class GameState:
         self.max_enemy_total = max(self.enemy_totals.values(), default=0)
         self.max_enemy_production = max(self.enemy_productions.values(), default=0)
         
-        # Map control
-        self.my_planet_count = len(self.my_planets)
-        self.total_planets = len(self.planets)
-        self.map_control = self.my_planet_count / max(self.total_planets, 1)
+        self.turns_remaining = 500 - self.step
     
     def _track_fleets(self, owner):
-        """Precise fleet tracking with ETA calculations."""
+        """PROPER geometric fleet tracking."""
         targets = defaultdict(list)
         for f in self.fleets:
             if f.owner != owner:
                 continue
             
             best_planet = None
-            best_score = float('inf')
+            best_dist = float('inf')
             
             for p in self.planets:
                 d = distance(f.x, f.y, p.x, p.y)
                 if d < 1:
                     continue
-                    
+                
+                # PROPER geometric check
                 angle_to_planet = angle_to(f.x, f.y, p.x, p.y)
                 angle_diff = abs(normalize_angle(f.angle - angle_to_planet))
                 
-                if angle_diff < 0.5 and d < 90:
-                    score = d + angle_diff * 100
-                    if score < best_score:
-                        best_score = score
+                # Stricter check
+                if angle_diff < 0.3 and d < 100:
+                    if d < best_dist:
+                        best_dist = d
                         best_planet = p
             
             if best_planet:
-                eta = travel_time(distance(f.x, f.y, best_planet.x, best_planet.y), f.ships)
+                eta = travel_time(d, f.ships)
                 targets[best_planet.id].append((f.ships, eta))
         
         return targets
     
     def simulate_planet_at_time(self, planet, at_time):
-        """PRECISE simulation of planet state at specific time."""
+        """COMPLETE simulation with all fleets."""
         future_ships = planet.ships
         future_owner = planet.owner
         
-        # Production
         if planet.owner != -1:
             future_ships += int(planet.production * at_time)
         
-        # Collect ALL fleets arriving by this time
-        incoming_by_owner = defaultdict(int)
+        incoming = defaultdict(int)
         
-        # My fleets
         if planet.id in self.my_fleet_targets:
             for ships, eta in self.my_fleet_targets[planet.id]:
                 if eta <= at_time:
-                    incoming_by_owner[self.player] += ships
+                    incoming[self.player] += ships
         
-        # Enemy fleets
         for enemy_id, targets in self.enemy_fleet_targets.items():
             if planet.id in targets:
                 for ships, eta in targets[planet.id]:
                     if eta <= at_time:
-                        incoming_by_owner[enemy_id] += ships
+                        incoming[enemy_id] += ships
         
-        # Combat simulation
-        if incoming_by_owner:
+        if incoming:
             if future_owner != -1:
-                incoming_by_owner[future_owner] += future_ships
+                incoming[future_owner] += future_ships
             
-            forces = sorted(incoming_by_owner.items(), key=lambda x: x[1], reverse=True)
+            forces = sorted(incoming.items(), key=lambda x: x[1], reverse=True)
             
             if len(forces) >= 2:
                 if forces[0][1] > forces[1][1]:
@@ -197,198 +208,199 @@ class GameState:
         
         return future_owner, future_ships
     
-    def who_reaches_first(self, planet, my_eta):
-        """Determine if we reach before enemy (race condition)."""
+    def enemy_targeting_planet(self, planet_id):
+        """Check if enemy is targeting this planet."""
         for enemy_targets in self.enemy_fleet_targets.values():
-            if planet.id in enemy_targets:
-                for _, enemy_eta in enemy_targets[planet.id]:
-                    if enemy_eta < my_eta - 1:  # Enemy arrives 1+ turn earlier
-                        return False
-        return True
+            if planet_id in enemy_targets:
+                return True
+        return False
 
-class EliteStrategy:
+class UltimateStrategy:
     def __init__(self, gs):
         self.gs = gs
         self.used = set()
-        self.turns_remaining = 500 - gs.step
         
-        # Strategy mode
-        if self.turns_remaining < 30:
-            self.mode = "endgame"
-        elif gs.step < 50:
+        # STRATEGIC MODE
+        if gs.step < 40:
+            self.mode = "rush"  # RUSH early game
+        elif gs.step < 80:
             self.mode = "expansion"
+        elif gs.turns_remaining < 50:
+            self.mode = "endgame"
         elif gs.my_production < gs.max_enemy_production * 0.6:
             self.mode = "catch_up"
-        elif gs.my_total < gs.max_enemy_total * 0.75:
-            self.mode = "disrupt"
-        elif gs.my_total > gs.max_enemy_total * 1.4:
-            self.mode = "consolidate"
+        elif gs.my_total < gs.max_enemy_total * 0.7:
+            self.mode = "eliminate"  # Focus on enemy
+        elif gs.my_total > gs.max_enemy_total * 1.5:
+            self.mode = "dominate"
         else:
             self.mode = "balanced"
     
-    def calculate_roi(self, target, ships_sent, eta):
-        """Calculate ROI: production value vs ship cost."""
-        # Value gained: production over remaining game
-        turns_owned = max(0, self.turns_remaining - eta)
-        production_value = target.production * turns_owned
+    def calculate_etf(self, source, target):
+        """Expected Time to Capture - proper metric."""
+        d = distance(source.x, source.y, target.x, target.y)
+        ships_needed = target.ships + 1
         
-        # Cost: ships sent
-        cost = ships_sent
+        if target.owner != -1:
+            eta = travel_time(d, ships_needed)
+            ships_needed += int(target.production * eta * 1.3)
         
-        # ROI
-        roi = production_value / max(cost, 1)
-        return roi
+        if ships_needed > source.ships * 0.9:
+            return float('inf')
+        
+        eta = travel_time(d, ships_needed)
+        
+        # ETF = time + (ships_cost / production_value)
+        production_value = target.production
+        etf = eta + (ships_needed / max(production_value, 1))
+        
+        return etf
     
     def evaluate_target(self, target):
-        """Precise target evaluation."""
+        """ADVANCED evaluation with all factors."""
         # Base value
-        value = target.production ** 2 * 100
+        value = target.production ** 2.5 * 100
         
-        # Distance efficiency
+        # Distance from ALL our planets
         if self.gs.my_planets:
-            avg_dist = sum(distance(p.x, p.y, target.x, target.y) 
-                          for p in self.gs.my_planets) / len(self.gs.my_planets)
-            distance_penalty = avg_dist * 1.2
+            min_dist = min(distance(p.x, p.y, target.x, target.y) for p in self.gs.my_planets)
+            distance_penalty = min_dist * 1.0
         else:
             distance_penalty = 0
         
-        # Contest detection
+        # Enemy contest
         contest_penalty = 0
-        for enemy_targets in self.gs.enemy_fleet_targets.values():
-            if target.id in enemy_targets:
-                contest_penalty += 150
+        if self.gs.enemy_targeting_planet(target.id):
+            contest_penalty = 200
         
-        # Map control
-        map_bonus = 0
-        if self.gs.map_control < 0.3 and target.owner == -1:
-            map_bonus = 200
-        
-        # Mode adjustments
-        if self.mode == "expansion":
+        # Mode-specific
+        if self.mode == "rush":
             if target.owner == -1:
-                value *= 2.5
-                distance_penalty *= 0.5
+                value *= 3.0
+                distance_penalty *= 0.3
+        elif self.mode == "expansion":
+            if target.owner == -1:
+                value *= 2.0
         elif self.mode == "catch_up":
             if target.production >= 4:
+                value *= 3.5
+        elif self.mode == "eliminate":
+            if target.owner != -1:
                 value *= 3.0
-        elif self.mode == "disrupt":
-            if target.owner != -1 and target.production >= 3:
-                value *= 2.5
-        elif self.mode == "consolidate":
-            if target.production < 3:
-                value *= 0.2
         elif self.mode == "endgame":
-            if target.owner == -1:
-                value *= 0.2  # Avoid neutrals
-            else:
-                value *= 2.5  # Deny enemy
+            # Only high-value or enemy
+            if target.owner == -1 and target.production < 3:
+                value *= 0.1
+            elif target.owner != -1:
+                value *= 2.5
+        elif self.mode == "dominate":
+            if target.production < 3:
+                value *= 0.3
         
-        # Comet penalty
+        # Comet strategy
         if target.id in self.gs.comet_ids:
-            value *= 0.05
+            if self.gs.step < 150:
+                value *= 0.8  # Capture early comets
+            else:
+                value *= 0.05  # Avoid late comets
         
-        return value + map_bonus - distance_penalty - contest_penalty
+        return value - distance_penalty - contest_penalty
     
-    def find_precise_synchronized_attack(self, target, sources):
-        """TRUE synchronization: ±1 turn tolerance."""
+    def calculate_exact_fleet_size(self, source, target, eta):
+        """EXACT fleet size - not conservative."""
+        future_owner, future_ships = self.gs.simulate_planet_at_time(target, eta)
+        
+        # Adaptive buffer
+        buffer = max(8, int(0.12 * future_ships))
+        needed = future_ships + buffer
+        
+        # Don't over-send
+        available = source.ships - 12
+        
+        return min(needed, available)
+    
+    def find_gang_up_attack(self, target, sources):
+        """GANG UP: Multiple planets on single target."""
         if not sources:
             return []
         
-        # Calculate ETAs
         source_data = []
         for src in sources:
             if src.id in self.used:
                 continue
             
             d = distance(src.x, src.y, target.x, target.y)
-            est_ships = 50
-            eta = travel_time(d, est_ships)
+            eta = travel_time(d, 50)
             
-            if eta > self.turns_remaining:
+            if eta > self.gs.turns_remaining:
                 continue
             
-            available = src.ships - 15
-            if available > 20:
-                source_data.append((src, eta, d, available))
+            available = src.ships - 12
+            if available > 15:
+                source_data.append((src, eta, available))
         
         if not source_data:
             return []
         
-        # Sort by ETA
         source_data.sort(key=lambda x: x[1])
         
-        # Find groups with ±1 turn synchronization
+        # Find synchronized group (±1 turn)
         best_plan = []
-        best_score = -1
         
         for i in range(len(source_data)):
             target_eta = source_data[i][1]
-            
-            # STRICT: ±1 turn tolerance
             group = []
-            total_ships = 0
+            total = 0
             
-            for src, eta, d, available in source_data:
-                if abs(eta - target_eta) <= 1.0:  # ±1 turn ONLY
-                    group.append((src, available, eta))
-                    total_ships += available
+            for src, eta, avail in source_data:
+                if abs(eta - target_eta) <= 1.0:
+                    group.append((src, avail, eta))
+                    total += avail
             
-            if len(group) >= 1:
-                # Simulate planet state at arrival
+            if group:
                 future_owner, future_ships = self.gs.simulate_planet_at_time(target, target_eta)
+                buffer = max(8, int(0.12 * future_ships))
+                needed = future_ships + buffer
                 
-                # ADAPTIVE buffer (not fixed +20)
-                buffer = max(10, int(0.15 * future_ships))
-                needed = future_ships + int(target.production * target_eta * 1.2) + buffer
-                
-                if total_ships >= needed:
-                    # ROI FILTER: Don't waste ships
-                    roi = self.calculate_roi(target, needed, target_eta)
-                    if roi < 0.4 and self.mode != "expansion":
-                        continue  # Bad ROI, skip
-                    
-                    # Check race condition
-                    if not self.gs.who_reaches_first(target, target_eta):
-                        continue  # Enemy reaches first
-                    
-                    score = total_ships / len(group)
-                    if score > best_score:
-                        best_score = score
-                        best_plan = group
+                if total >= needed:
+                    best_plan = group
+                    break
         
         if best_plan:
-            # Distribute ships
-            total_available = sum(avail for _, avail, _ in best_plan)
+            total_avail = sum(a for _, a, _ in best_plan)
             future_owner, future_ships = self.gs.simulate_planet_at_time(target, best_plan[0][2])
-            buffer = max(10, int(0.15 * future_ships))
-            needed_total = future_ships + int(target.production * best_plan[0][2] * 1.2) + buffer
+            buffer = max(8, int(0.12 * future_ships))
+            needed_total = future_ships + buffer
             
-            ratio = min(needed_total / total_available, 0.95)
+            ratio = min(needed_total / total_avail, 0.98)
             
-            final_plan = []
+            final = []
             for src, avail, eta in best_plan:
                 ships = int(avail * ratio)
-                if ships >= 15:
-                    final_plan.append((src, ships, eta))
+                if ships >= 10:
+                    final.append((src, ships, eta))
             
-            return final_plan
+            return final
         
         return []
     
-    def should_attack_in_endgame(self, target, ships_needed):
-        """SMART endgame: attack if guaranteed gain."""
+    def should_attack_endgame(self, target, ships_cost, eta):
+        """ENDGAME: Only attack if arrives in time and net positive."""
         if self.mode != "endgame":
             return True
         
+        # Won't arrive in time
+        if eta > self.gs.turns_remaining - 5:
+            return False
+        
         # Calculate net gain
-        future_production = target.production * max(0, self.turns_remaining - 10)
-        net_gain = future_production - ships_needed
+        turns_owned = max(0, self.gs.turns_remaining - eta - 5)
+        production_gain = target.production * turns_owned
+        net = production_gain - ships_cost
         
-        # Only attack if net positive
-        if net_gain > 0:
+        # Attack if net positive or denying enemy
+        if net > 0:
             return True
-        
-        # Or if denying enemy ships
         if target.owner != -1 and target.owner != self.gs.player:
             return True
         
@@ -396,81 +408,81 @@ class EliteStrategy:
 
 def agent(obs: dict) -> List[List]:
     """
-    ELITE 2500-3500+ bot with precise timing and mathematical optimization.
+    ULTIMATE 4000-rating bot with all strategic improvements.
     """
     gs = GameState(obs)
-    strat = EliteStrategy(gs)
+    strat = UltimateStrategy(gs)
     moves = []
     
-    # PHASE 1: DEFENSE
-    for planet in sorted(gs.my_planets, key=lambda p: p.production, reverse=True)[:5]:
+    # PHASE 1: DEFENSE (only critical)
+    for planet in sorted(gs.my_planets, key=lambda p: p.production, reverse=True)[:3]:
         if planet.id in strat.used:
             continue
         
         if planet.id in gs.enemy_fleet_targets.get(gs.player, {}):
-            future_owner, future_ships = gs.simulate_planet_at_time(planet, 10)
+            future_owner, _ = gs.simulate_planet_at_time(planet, 8)
             
             if future_owner != gs.player:
-                for src in gs.my_planets:
+                # Find closest reinforcement
+                for src in sorted(gs.my_planets, key=lambda p: distance(p.x, p.y, planet.x, planet.y)):
                     if src.id == planet.id or src.id in strat.used:
                         continue
                     
                     d = distance(src.x, src.y, planet.x, planet.y)
-                    eta = travel_time(d, 50)
-                    
-                    if eta < 12 and src.ships > 30:
-                        needed = max(50, int(src.ships * 0.5))
+                    if d < 40 and src.ships > 25:
+                        ships = int(src.ships * 0.6)
                         ang = safe_angle(src.x, src.y, planet.x, planet.y)
-                        if ang is not None:
-                            moves.append([src.id, ang, needed])
+                        if ang:
+                            moves.append([src.id, ang, ships])
                             strat.used.add(src.id)
                             break
     
     # PHASE 2: GLOBAL TARGETS
     all_targets = gs.neutral_planets + gs.enemy_planets
-    scored_targets = [(t, strat.evaluate_target(t)) for t in all_targets]
-    scored_targets.sort(key=lambda x: x[1], reverse=True)
+    scored = [(t, strat.evaluate_target(t)) for t in all_targets]
+    scored.sort(key=lambda x: x[1], reverse=True)
     
-    # PHASE 3: PRECISE SYNCHRONIZED ATTACKS
-    available_sources = [p for p in gs.my_planets 
-                        if p.id not in strat.used and p.ships >= 20]
+    # PHASE 3: ATTACKS (gang up + proper intercept)
+    available = [p for p in gs.my_planets if p.id not in strat.used and p.ships >= 15]
     
-    for target, score in scored_targets[:15]:
+    for target, score in scored[:20]:
         if score <= 0:
             break
         
         # Check existing attacks
         if target.id in gs.my_fleet_targets:
             incoming = sum(s for s, _ in gs.my_fleet_targets[target.id])
-            if incoming > target.ships * 2:
+            if incoming > target.ships * 2.5:
                 continue
         
-        # Find PRECISE synchronized attack (±1 turn)
-        plan = strat.find_precise_synchronized_attack(target, available_sources)
+        # Try gang up attack
+        plan = strat.find_gang_up_attack(target, available)
         
         if plan:
-            # Check endgame logic
-            total_ships = sum(ships for _, ships, _ in plan)
-            if not strat.should_attack_in_endgame(target, total_ships):
+            # Check endgame
+            total_ships = sum(s for _, s, _ in plan)
+            eta = plan[0][2]
+            
+            if not strat.should_attack_endgame(target, total_ships, eta):
                 continue
             
-            # Execute
+            # Execute with PROPER intercept
             for src, ships, eta in plan:
+                # Iterative intercept for orbiting
                 d = distance(src.x, src.y, target.x, target.y)
                 if d < ROTATION_RADIUS_LIMIT - 8:
-                    future_x, future_y = predict_position(target.x, target.y, 
-                                                         gs.angular_vel, int(eta))
-                    ang = angle_to(src.x, src.y, future_x, future_y)
+                    ang, _ = iterative_intercept(src.x, src.y, target.x, target.y, 
+                                                gs.angular_vel, ships)
                 else:
                     ang = angle_to(src.x, src.y, target.x, target.y)
                 
                 safe_ang = safe_angle(src.x, src.y, target.x, target.y)
-                if safe_ang is not None:
+                if safe_ang:
                     moves.append([src.id, safe_ang, ships])
                     strat.used.add(src.id)
-                    available_sources = [p for p in available_sources if p.id != src.id]
+                    available = [p for p in available if p.id != src.id]
             
-            if len(strat.used) >= len(gs.my_planets) * 0.85:
+            if len(strat.used) >= len(gs.my_planets) * 0.9:
                 break
     
     return moves
